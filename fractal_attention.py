@@ -42,8 +42,8 @@ class FractalAttention:
         return F.scaled_dot_product_attention(X, X, X)
     
     def _geometric_gradient(self, X, level):
-        # Implement Riemannian gradient on manifold
-        metric = torch.eye(X.shape[-1]) * (1.0 / (level + 1))
+        # Simplified geometric gradient computation without autograd
+        metric = torch.eye(X.shape[-1], dtype=torch.float32) * (1.0 / (level + 1))
         grad = X @ metric
         return grad
     
