@@ -1,13 +1,49 @@
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
-from fractal_attention import FractalAttention
-from visualization import plot_attention_patterns, plot_fractal_dimension
+import torch
+import json
+from enhanced_fractal_attention import EnhancedFractalAttention
+from visualization import plot_attention_patterns, plot_fractal_dimension, plot_manifold_dimension
 from utils import generate_sample_data, render_latex_equations
 
 st.set_page_config(page_title="Fractal-Fractal Recompressive Attention Visualizer", layout="wide")
 
 st.title("Fractal-Fractal Recompressive Attention Visualizer")
+
+@st.cache_data
+def compute_attention_patterns(input_data, max_depth):
+    try:
+        attention = EnhancedFractalAttention(input_data, max_depth=max_depth)
+        output = attention(attention.X)
+        metrics = attention.get_metrics()
+        return {
+            'output': output.detach().numpy(),
+            'metrics': {
+                'information_content': float(metrics.information_content),
+                'attention_conservation': float(metrics.attention_conservation),
+                'fractal_dimension': float(metrics.fractal_dimension),
+                'manifold_dimension': float(metrics.manifold_dimension)
+            }
+        }
+    except Exception as e:
+        st.error(f"Error computing attention patterns: {str(e)}")
+        return None
+
+@st.cache_data
+def analyze_fractal_dimensions(input_data, max_depth):
+    try:
+        dimensions = []
+        manifold_dims = []
+        for level in range(max_depth):
+            attention = EnhancedFractalAttention(input_data, level=level, max_depth=max_depth)
+            metrics = attention.get_metrics()
+            dimensions.append(metrics.fractal_dimension)
+            manifold_dims.append(metrics.manifold_dimension)
+        return dimensions, manifold_dims
+    except Exception as e:
+        st.error(f"Error analyzing dimensions: {str(e)}")
+        return None, None
 
 # Sidebar controls
 st.sidebar.header("Parameters")
@@ -28,26 +64,38 @@ with col1:
     st.subheader("Attention Patterns")
     if st.button("Compute Attention"):
         with st.spinner("Computing attention patterns..."):
-            attention = FractalAttention(input_data, max_depth=max_depth)
-            fig = plot_attention_patterns(attention)
-            st.plotly_chart(fig, use_container_width=True)
+            result = compute_attention_patterns(input_data, max_depth)
+            if result:
+                fig = plot_attention_patterns(result['output'])
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.json(result['metrics'])
 
 with col2:
     st.subheader("Fractal Properties")
     if st.button("Analyze Fractal Dimensions"):
         with st.spinner("Analyzing fractal dimensions..."):
-            dimensions = []
-            for level in range(max_depth):
-                attention = FractalAttention(input_data, level=level, max_depth=max_depth)
-                dim = attention.fractal_dimension(input_data, level)
-                dimensions.append(dim)
-            
-            fig = plot_fractal_dimension(dimensions)
-            st.plotly_chart(fig, use_container_width=True)
+            dimensions, manifold_dims = analyze_fractal_dimensions(input_data, max_depth)
+            if dimensions and manifold_dims:
+                fig_fractal = plot_fractal_dimension(dimensions)
+                st.plotly_chart(fig_fractal, use_container_width=True)
+                
+                fig_manifold = plot_manifold_dimension(manifold_dims)
+                st.plotly_chart(fig_manifold, use_container_width=True)
 
     st.subheader("Information Conservation")
     if st.button("Verify Properties"):
         with st.spinner("Verifying mathematical properties..."):
-            attention = FractalAttention(input_data, max_depth=max_depth)
-            st.write("Information Content:", attention.get_information_content())
-            st.write("Attention Conservation:", attention.verify_attention_conservation())
+            try:
+                attention = EnhancedFractalAttention(input_data, max_depth=max_depth)
+                metrics = attention.get_metrics()
+                
+                st.write("Enhanced Metrics:")
+                st.json({
+                    'Information Content': float(metrics.information_content),
+                    'Attention Conservation': float(metrics.attention_conservation),
+                    'Fractal Dimension': float(metrics.fractal_dimension),
+                    'Manifold Dimension': float(metrics.manifold_dimension)
+                })
+            except Exception as e:
+                st.error(f"Error verifying properties: {str(e)}")
