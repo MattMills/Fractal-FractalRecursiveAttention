@@ -178,33 +178,42 @@ class EnhancedFractalAttention:
 
     def fractal_dimension(self, X: torch.Tensor, level: int) -> float:
         """Compute fractal dimension using correlation dimension estimation"""
-        eps = 1e-6
-        scales = torch.logspace(-2, 0, 20)
+        # Use more scale points and wider range for better distribution
+        scales = torch.logspace(-3, 1, 30)  # More points, wider range
         counts = []
         
-        # Use correlation dimension estimation
+        # Normalize input for stable distance computation
         X_normalized = F.normalize(X, p=2, dim=-1)
         distances = torch.cdist(X_normalized, X_normalized)
         
+        # Compute box counts at each scale
         for scale in scales:
-            # Count points within each scale
-            count = torch.sum(distances < scale)
+            # Use smooth counting with gaussian kernel
+            kernel = torch.exp(-distances**2 / (2 * scale**2))
+            count = torch.sum(kernel > 0.5)  # Adaptive threshold
             counts.append(float(count))
         
-        # Robust linear regression for slope estimation
+        # Robust regression using multiple regions
         x = torch.log(scales)
         y = torch.log(torch.tensor(counts))
         
-        # Use middle portion of scaling region
-        mid_start = len(scales) // 4
-        mid_end = 3 * len(scales) // 4
+        # Split into three regions for multi-scale analysis
+        regions = [(0, len(scales)//3), 
+                  (len(scales)//3, 2*len(scales)//3),
+                  (2*len(scales)//3, len(scales))]
+                  
+        slopes = []
+        for start, end in regions:
+            slope = ((x[start:end] * y[start:end]).mean() - 
+                    x[start:end].mean() * y[start:end].mean()) / (
+                    (x[start:end] ** 2).mean() - x[start:end].mean() ** 2)
+            slopes.append(slope)
         
-        slope = ((x[mid_start:mid_end] * y[mid_start:mid_end]).mean() - 
-                x[mid_start:mid_end].mean() * y[mid_start:mid_end].mean()) / (
-                (x[mid_start:mid_end] ** 2).mean() - x[mid_start:mid_end].mean() ** 2)
+        # Use median slope for robustness
+        final_slope = torch.tensor(slopes).median()
         
-        # Return normalized dimension
-        return float(torch.clamp(slope / (2 * self.dim), 0.0, 1.0))
+        # Normalize to (0,1) with sigmoid for smoother distribution
+        return float(torch.sigmoid(final_slope / self.dim))
 
     def get_metrics(self) -> AttentionMetrics:
         """Compute comprehensive attention metrics"""
