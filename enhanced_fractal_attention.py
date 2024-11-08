@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
+import sys
 
 
 @dataclass
@@ -32,6 +33,10 @@ class EnhancedFractalAttention:
             adaptive_depth: Use adaptive depth control
             manifold_aware: Use manifold-aware compression
         """
+        # Add recursion limit check
+        if max_depth and max_depth > sys.getrecursionlimit() // 2:
+            max_depth = min(max_depth, sys.getrecursionlimit() // 2)
+            
         self.X = torch.tensor(X, dtype=torch.float32)
         self.level = level
         self.max_depth = max_depth if not adaptive_depth else None
@@ -57,10 +62,12 @@ class EnhancedFractalAttention:
         info_content = self.get_information_content()
         spectral_gap = self._compute_spectral_gap(X)
 
-        # Combine information content and spectral properties
-        optimal_depth = max(1, int(-np.log2(info_content) * spectral_gap))
-        return min(optimal_depth,
-                   10)  # Cap maximum depth for computational feasibility
+        # More conservative depth estimation
+        optimal_depth = max(1, min(
+            int(-np.log2(info_content) * spectral_gap),
+            sys.getrecursionlimit() // 2
+        ))
+        return min(optimal_depth, 5)  # Lower maximum depth for stability
 
     def _compute_spectral_gap(self, X: torch.Tensor) -> float:
         """Compute normalized spectral gap for depth estimation"""
@@ -71,8 +78,12 @@ class EnhancedFractalAttention:
         return gap.item()
 
     def _fractal_attention(self, X: torch.Tensor, level: int,
-                           max_depth: Optional[int]) -> torch.Tensor:
+                          max_depth: Optional[int]) -> torch.Tensor:
         """Main fractal attention computation with enhanced stability"""
+        # Add early stopping based on convergence
+        if level > 0 and torch.allclose(X, self.X, rtol=1e-5):
+            return X
+            
         if max_depth and level >= max_depth:
             return self._base_attention(X)
 
@@ -91,11 +102,11 @@ class EnhancedFractalAttention:
         # Recursive call with manifold-aware compression
         if max_depth is None or level < max_depth:
             compressed = (self._manifold_compress(attended, scores, level)
-                          if self.manifold_aware else self._recompress(
-                              attended, scores, level))
+                        if self.manifold_aware else self._recompress(
+                            attended, scores, level))
 
             sub_attention = self._fractal_attention(compressed, level + 1,
-                                                    max_depth)
+                                                  max_depth)
             return self._reconstruct(sub_attention, level)
 
         return attended
@@ -132,7 +143,7 @@ class EnhancedFractalAttention:
         return grad - 0.5 * correction / (level + 1)
 
     def _manifold_compress(self, X: torch.Tensor, scores: torch.Tensor,
-                           level: int) -> torch.Tensor:
+                          level: int) -> torch.Tensor:
         """Manifold-aware compression with adaptive dimension"""
         U, S, V = torch.svd(X)
 
@@ -143,12 +154,11 @@ class EnhancedFractalAttention:
         dim_est = max(1, min(dim_est, X.shape[-1] - 1))
 
         # Project onto estimated manifold with proper scaling
-        projection = U[:, :dim_est] @ torch.diag(
-            S[:dim_est]) @ V[:, :dim_est].T
+        projection = U[:, :dim_est] @ torch.diag(S[:dim_est]) @ V[:, :dim_est].T
         return projection * np.sqrt(dim_est / X.shape[-1])
 
     def _recompress(self, X: torch.Tensor, scores: torch.Tensor,
-                    level: int) -> torch.Tensor:
+                   level: int) -> torch.Tensor:
         """Fallback compression method when manifold-aware is disabled"""
         D = self.fractal_dimension(X, level)
         k = max(int(X.shape[-1] * D), 1)
@@ -228,5 +238,4 @@ class EnhancedFractalAttention:
 
         relative_error = torch.abs(trace_input - trace_output) / (
             torch.abs(trace_input) + 1e-8)
-        return 1.0 - relative_error.item(
-        )  # Return conservation score between 0 and 1
+        return 1.0 - relative_error.item()  # Return conservation score between 0 and 1
