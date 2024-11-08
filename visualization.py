@@ -5,6 +5,33 @@ import torch
 from scipy.cluster import hierarchy
 from scipy.spatial.distance import pdist, squareform
 
+def safe_plot_wrapper(plot_func):
+    def wrapper(*args, **kwargs):
+        try:
+            fig = plot_func(*args, **kwargs)
+            # Ensure proper initialization
+            if hasattr(fig, 'update_layout'):
+                fig.update_layout(
+                    modebar_remove=['sendDataToCloud'],
+                    hovermode='closest',
+                    uirevision=True
+                )
+            return fig
+        except Exception as e:
+            print(f"Error in plotting: {str(e)}")
+            # Return fallback visualization
+            return go.Figure().update_layout(
+                annotations=[{
+                    'text': f"Error: {str(e)}",
+                    'xref': "paper",
+                    'yref': "paper",
+                    'showarrow': False,
+                    'font': {'size': 14}
+                }]
+            )
+    return wrapper
+
+@safe_plot_wrapper
 def plot_attention_patterns(attention_matrix):
     """Plot attention patterns with enhanced visualization"""
     if isinstance(attention_matrix, torch.Tensor):
@@ -50,6 +77,7 @@ def plot_attention_patterns(attention_matrix):
     
     return fig
 
+@safe_plot_wrapper
 def plot_3d_attention(attention_matrix):
     """Create 3D visualization of attention patterns"""
     if isinstance(attention_matrix, torch.Tensor):
@@ -88,6 +116,7 @@ def plot_3d_attention(attention_matrix):
     
     return fig
 
+@safe_plot_wrapper
 def plot_hierarchical_attention(attention_matrix):
     """Plot attention patterns with hierarchical clustering"""
     if isinstance(attention_matrix, torch.Tensor):
@@ -126,6 +155,7 @@ def plot_hierarchical_attention(attention_matrix):
     
     return fig
 
+@safe_plot_wrapper
 def plot_attention_evolution(attention_matrices):
     """Plot time evolution of attention patterns"""
     if isinstance(attention_matrices, torch.Tensor):
@@ -172,6 +202,7 @@ def plot_attention_evolution(attention_matrices):
     
     return fig
 
+@safe_plot_wrapper
 def plot_fractal_dimension(dimensions):
     """Plot fractal dimensions across levels with confidence intervals"""
     if isinstance(dimensions, torch.Tensor):
@@ -221,6 +252,7 @@ def plot_fractal_dimension(dimensions):
     
     return fig
 
+@safe_plot_wrapper
 def plot_manifold_dimension(manifold_dims):
     """Plot manifold dimension evolution with theoretical bounds"""
     if isinstance(manifold_dims, torch.Tensor):
