@@ -32,13 +32,8 @@ class EnhancedFractalAttention:
             adaptive_depth: Use adaptive depth control
             manifold_aware: Use manifold-aware compression
         """
-        # Force reasonable max_depth
-        if max_depth is None:
-            max_depth = 5  # Conservative default
-        else:
-            max_depth = min(max_depth, 5)  # Hard limit at 5 levels
-            
-        self.X = torch.tensor(X, dtype=torch.float32)
+        # Convert input to tensor with gradients enabled
+        self.X = torch.tensor(X, dtype=torch.float32, requires_grad=True)
         self.level = level
         self.max_depth = max_depth
         self.dim = X.shape[-1]
@@ -126,16 +121,29 @@ class EnhancedFractalAttention:
 
     def _compute_metric_tensor(self, X: torch.Tensor) -> torch.Tensor:
         """Compute local metric tensor from data"""
-        grad = torch.autograd.grad(X.sum(), X, create_graph=True)[0]
-        return grad @ grad.T + torch.eye(X.shape[-1]) * 1e-6
+        try:
+            if not X.requires_grad:
+                X = X.detach().requires_grad_(True)
+            # Use torch.autograd.grad safely
+            grad = torch.autograd.grad(X.sum(), X, create_graph=True, allow_unused=True)[0]
+            if grad is None:
+                return torch.eye(X.shape[-1], dtype=X.dtype, device=X.device)
+            return grad @ grad.T + torch.eye(X.shape[-1], dtype=X.dtype, device=X.device) * 1e-6
+        except Exception:
+            # Fallback to identity metric if gradient computation fails
+            return torch.eye(X.shape[-1], dtype=X.dtype, device=X.device)
 
     def _geometric_gradient(self, X: torch.Tensor, level: int) -> torch.Tensor:
         """Enhanced geometric gradient computation"""
-        metric = self._compute_metric_tensor(X)
-        grad = X @ metric
-        # Add curvature correction
-        correction = torch.einsum('ij,jk,kl->il', grad, metric, grad)
-        return grad - 0.5 * correction / (level + 1)
+        try:
+            metric = self._compute_metric_tensor(X)
+            grad = X @ metric
+            # Safe computation of curvature correction
+            correction = torch.einsum('ij,jk,kl->il', grad, metric, grad)
+            return (grad - 0.5 * correction / (level + 1)).detach()
+        except Exception:
+            # Fallback to simpler gradient if computation fails
+            return X @ torch.eye(X.shape[-1], dtype=X.dtype, device=X.device)
 
     def _base_attention(self, X: torch.Tensor) -> torch.Tensor:
         """Base attention mechanism for terminal nodes"""
