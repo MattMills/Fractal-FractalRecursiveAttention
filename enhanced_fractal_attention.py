@@ -124,13 +124,11 @@ class EnhancedFractalAttention:
         try:
             if not X.requires_grad:
                 X = X.detach().requires_grad_(True)
-            # Use torch.autograd.grad safely
             grad = torch.autograd.grad(X.sum(), X, create_graph=True, allow_unused=True)[0]
             if grad is None:
                 return torch.eye(X.shape[-1], dtype=X.dtype, device=X.device)
             return grad @ grad.T + torch.eye(X.shape[-1], dtype=X.dtype, device=X.device) * 1e-6
         except Exception:
-            # Fallback to identity metric if gradient computation fails
             return torch.eye(X.shape[-1], dtype=X.dtype, device=X.device)
 
     def _geometric_gradient(self, X: torch.Tensor, level: int) -> torch.Tensor:
@@ -138,11 +136,9 @@ class EnhancedFractalAttention:
         try:
             metric = self._compute_metric_tensor(X)
             grad = X @ metric
-            # Safe computation of curvature correction
             correction = torch.einsum('ij,jk,kl->il', grad, metric, grad)
             return (grad - 0.5 * correction / (level + 1)).detach()
         except Exception:
-            # Fallback to simpler gradient if computation fails
             return X @ torch.eye(X.shape[-1], dtype=X.dtype, device=X.device)
 
     def _base_attention(self, X: torch.Tensor) -> torch.Tensor:
@@ -181,24 +177,34 @@ class EnhancedFractalAttention:
         return X * scale + correction * scale * scale
 
     def fractal_dimension(self, X: torch.Tensor, level: int) -> float:
-        """Improved fractal dimension estimation"""
+        """Compute fractal dimension using correlation dimension estimation"""
         eps = 1e-6
-        scales = torch.logspace(-1, 1, 20)
+        scales = torch.logspace(-2, 0, 20)
         counts = []
-
+        
+        # Use correlation dimension estimation
         X_normalized = F.normalize(X, p=2, dim=-1)
+        distances = torch.cdist(X_normalized, X_normalized)
+        
         for scale in scales:
-            boxes = torch.floor(X_normalized / scale)
-            unique_boxes = torch.unique(boxes, dim=0)
-            counts.append(len(unique_boxes))
-
-        x = torch.log(1 / scales)
-        y = torch.log(torch.tensor(counts, dtype=torch.float32))
-
-        # Robust linear regression with outlier handling
-        mask = torch.abs(y - y.mean()) < 2 * y.std()
-        D = ((x[mask] * y[mask]).mean() / (x[mask] * x[mask]).mean()).item()
-        return max(0.0, min(D, 1.0))
+            # Count points within each scale
+            count = torch.sum(distances < scale)
+            counts.append(float(count))
+        
+        # Robust linear regression for slope estimation
+        x = torch.log(scales)
+        y = torch.log(torch.tensor(counts))
+        
+        # Use middle portion of scaling region
+        mid_start = len(scales) // 4
+        mid_end = 3 * len(scales) // 4
+        
+        slope = ((x[mid_start:mid_end] * y[mid_start:mid_end]).mean() - 
+                x[mid_start:mid_end].mean() * y[mid_start:mid_end].mean()) / (
+                (x[mid_start:mid_end] ** 2).mean() - x[mid_start:mid_end].mean() ** 2)
+        
+        # Return normalized dimension
+        return float(torch.clamp(slope / (2 * self.dim), 0.0, 1.0))
 
     def get_metrics(self) -> AttentionMetrics:
         """Compute comprehensive attention metrics"""
@@ -217,17 +223,22 @@ class EnhancedFractalAttention:
         return torch.sum(cumulative_energy < 0.95).item()
 
     def get_information_content(self) -> float:
+        """Compute information content using relative entropy"""
         attention_output = self(self.X)
         eps = 1e-10
         
-        # Normalize output and compute proper probabilities
-        attention_output = F.normalize(attention_output, p=2, dim=-1)
-        probs = F.softmax(attention_output, dim=-1)
+        # Compute attention probabilities with proper normalization
+        X_norm = F.normalize(attention_output, p=2, dim=-1)
+        QK = X_norm @ X_norm.T / np.sqrt(self.dim)
+        probs = F.softmax(QK, dim=-1)
         probs = torch.clamp(probs, min=eps, max=1.0)
         
-        # Compute normalized entropy
-        entropy = -torch.sum(probs * torch.log2(probs)) / (self.dim * np.log2(self.dim))
-        return float(entropy)  # Should be between 0 and 1
+        # Compute entropy relative to uniform distribution
+        uniform = torch.ones_like(probs) / probs.shape[-1]
+        relative_entropy = torch.sum(probs * torch.log2(probs / uniform)) / self.dim
+        
+        # Normalize to [0,1] using sigmoid
+        return float(torch.sigmoid(relative_entropy).item())
 
     def verify_attention_conservation(self) -> float:
         X = F.normalize(self.X, p=2, dim=-1)
