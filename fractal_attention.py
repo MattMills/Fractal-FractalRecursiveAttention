@@ -18,23 +18,25 @@ class FractalAttention:
         if max_depth and level >= max_depth:
             return self._base_attention(X)
         
-        # Compute attention scores with gradient clipping
-        grad = self._geometric_gradient(X, level)
-        grad = torch.clamp(grad, -5.0, 5.0)  # Gradient clipping for stability
+        # Normalize input
+        X = F.normalize(X, p=2, dim=-1)
         
-        # Improved numerical stability in softmax computation
-        scores = grad @ X.T / np.sqrt(X.shape[-1])
-        scores = scores - scores.max(dim=-1, keepdim=True)[0]  # Subtract max for numerical stability
-        scores = F.softmax(scores, dim=-1)
+        # Compute attention with improved stability
+        QK = X @ X.T / np.sqrt(X.shape[-1])
+        QK = QK - torch.max(QK, dim=-1, keepdim=True)[0]
+        scores = F.softmax(QK, dim=-1)
         
-        # Apply recompression
-        compressed = self._recompress(X, scores, level)
+        # Apply attention with residual connection
+        attended = scores @ X
+        attended = attended + X  # Residual connection
         
-        # Recursive application
-        sub_attention = self._fractal_attention(compressed, level+1, max_depth)
+        # Recursive call with normalized input
+        if max_depth is None or level < max_depth:
+            compressed = self._recompress(attended, scores, level)
+            sub_attention = self._fractal_attention(compressed, level+1, max_depth)
+            return self._reconstruct(sub_attention, level)
         
-        # Transform back
-        return self._reconstruct(sub_attention, level)
+        return attended
     
     def _base_attention(self, X):
         return F.scaled_dot_product_attention(X, X, X)
@@ -101,18 +103,21 @@ class FractalAttention:
     
     def verify_attention_conservation(self):
         # Get attention patterns
-        attention_input = F.softmax(self.X @ self.X.T / np.sqrt(self.dim), dim=-1)
+        X_norm = F.normalize(self.X, p=2, dim=-1)
+        
+        # Input attention
+        QK_input = X_norm @ X_norm.T / np.sqrt(self.dim)
+        attention_input = F.softmax(QK_input, dim=-1)
+        
+        # Output attention
         attention_output = self(self.X)
+        attention_output = F.normalize(attention_output, p=2, dim=-1)
         
-        # Normalize matrices before computing traces
-        attention_input = attention_input / attention_input.sum()
-        attention_output = attention_output / attention_output.sum()
+        # Row-wise normalization
+        attention_input = F.normalize(attention_input, p=1, dim=-1)
+        attention_output = F.normalize(attention_output, p=1, dim=-1)
         
-        # Compute normalized traces
-        trace_input = torch.trace(attention_input)
-        trace_output = torch.trace(attention_output)
+        # Compare using Frobenius norm
+        diff = torch.norm(attention_input - attention_output, p='fro')
         
-        # Use relative error for comparison
-        relative_error = abs(trace_input - trace_output) / (abs(trace_input) + 1e-6)
-        
-        return relative_error < 1e-2  # Slightly relaxed tolerance for numerical stability
+        return diff < 1e-3  # Using Frobenius norm for comparison
