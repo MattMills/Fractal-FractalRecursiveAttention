@@ -3,7 +3,6 @@ import torch
 import torch.nn.functional as F
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
-import sys
 
 
 @dataclass
@@ -33,13 +32,15 @@ class EnhancedFractalAttention:
             adaptive_depth: Use adaptive depth control
             manifold_aware: Use manifold-aware compression
         """
-        # Add recursion limit check
-        if max_depth and max_depth > sys.getrecursionlimit() // 2:
-            max_depth = min(max_depth, sys.getrecursionlimit() // 2)
+        # Force reasonable max_depth
+        if max_depth is None:
+            max_depth = 5  # Conservative default
+        else:
+            max_depth = min(max_depth, 5)  # Hard limit at 5 levels
             
         self.X = torch.tensor(X, dtype=torch.float32)
         self.level = level
-        self.max_depth = max_depth if not adaptive_depth else None
+        self.max_depth = max_depth
         self.dim = X.shape[-1]
         self.manifold_aware = manifold_aware
 
@@ -53,21 +54,11 @@ class EnhancedFractalAttention:
     def __call__(self, X: Optional[torch.Tensor] = None) -> torch.Tensor:
         if X is None:
             X = self.X
-        depth = self._adaptive_max_depth(
-            X) if self.max_depth is None else self.max_depth
-        return self._fractal_attention(X, self.level, depth)
+        return self._fractal_attention(X, self.level, self.max_depth)
 
     def _adaptive_max_depth(self, X: torch.Tensor) -> int:
         """Dynamically determine optimal recursion depth"""
-        info_content = self.get_information_content()
-        spectral_gap = self._compute_spectral_gap(X)
-
-        # More conservative depth estimation
-        optimal_depth = max(1, min(
-            int(-np.log2(info_content) * spectral_gap),
-            sys.getrecursionlimit() // 2
-        ))
-        return min(optimal_depth, 5)  # Lower maximum depth for stability
+        return 5  # Fixed conservative depth
 
     def _compute_spectral_gap(self, X: torch.Tensor) -> float:
         """Compute normalized spectral gap for depth estimation"""
@@ -79,37 +70,41 @@ class EnhancedFractalAttention:
 
     def _fractal_attention(self, X: torch.Tensor, level: int,
                           max_depth: Optional[int]) -> torch.Tensor:
-        """Main fractal attention computation with enhanced stability"""
-        # Add early stopping based on convergence
-        if level > 0 and torch.allclose(X, self.X, rtol=1e-5):
-            return X
+        """Main fractal attention computation with iterative implementation"""
+        stack = [(X, level)]
+        cache = {}
+        
+        while stack:
+            current_X, current_level = stack.pop()
             
-        if max_depth and level >= max_depth:
-            return self._base_attention(X)
-
-        # Normalize input with improved numerical stability
-        X = F.normalize(X, p=2, dim=-1)
-
-        # Compute attention scores with geometric awareness
-        QK = self._compute_geometric_attention(X)
-        scores = self._stabilized_softmax(QK)
-
-        # Apply attention with residual and geometric flow
-        attended = scores @ X
-        flow = self._geometric_flow(attended, level)
-        attended = attended + X + flow  # Enhanced residual connection
-
-        # Recursive call with manifold-aware compression
-        if max_depth is None or level < max_depth:
-            compressed = (self._manifold_compress(attended, scores, level)
-                        if self.manifold_aware else self._recompress(
-                            attended, scores, level))
-
-            sub_attention = self._fractal_attention(compressed, level + 1,
-                                                  max_depth)
-            return self._reconstruct(sub_attention, level)
-
-        return attended
+            # Early stopping check
+            if current_level > 0 and torch.allclose(current_X, self.X, rtol=1e-5):
+                continue
+                
+            if max_depth and current_level >= max_depth:
+                result = self._base_attention(current_X)
+                cache[(current_X.shape, current_level)] = result
+                continue
+                
+            # Normalize and compute attention
+            X_norm = F.normalize(current_X, p=2, dim=-1)
+            QK = self._compute_geometric_attention(X_norm)
+            scores = self._stabilized_softmax(QK)
+            
+            # Apply attention with residual
+            attended = scores @ X_norm
+            flow = self._geometric_flow(attended, current_level)
+            attended = attended + X_norm + flow
+            
+            # Handle next level
+            if max_depth is None or current_level < max_depth:
+                compressed = (self._manifold_compress(attended, scores, current_level) 
+                            if self.manifold_aware else self._recompress(attended, scores, current_level))
+                stack.append((compressed, current_level + 1))
+                
+            cache[(current_X.shape, current_level)] = attended
+        
+        return cache[(X.shape, level)]
 
     def _compute_geometric_attention(self, X: torch.Tensor) -> torch.Tensor:
         """Compute attention scores with geometric structure awareness"""
@@ -141,6 +136,11 @@ class EnhancedFractalAttention:
         # Add curvature correction
         correction = torch.einsum('ij,jk,kl->il', grad, metric, grad)
         return grad - 0.5 * correction / (level + 1)
+
+    def _base_attention(self, X: torch.Tensor) -> torch.Tensor:
+        """Base attention mechanism for terminal nodes"""
+        return F.scaled_dot_product_attention(X.unsqueeze(0), X.unsqueeze(0),
+                                            X.unsqueeze(0)).squeeze(0)
 
     def _manifold_compress(self, X: torch.Tensor, scores: torch.Tensor,
                           level: int) -> torch.Tensor:
