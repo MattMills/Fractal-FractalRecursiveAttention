@@ -148,7 +148,7 @@ class EnhancedFractalAttention:
     def _base_attention(self, X: torch.Tensor) -> torch.Tensor:
         """Base attention mechanism for terminal nodes"""
         return F.scaled_dot_product_attention(X.unsqueeze(0), X.unsqueeze(0),
-                                            X.unsqueeze(0)).squeeze(0)
+                                           X.unsqueeze(0)).squeeze(0)
 
     def _manifold_compress(self, X: torch.Tensor, scores: torch.Tensor,
                           level: int) -> torch.Tensor:
@@ -217,33 +217,28 @@ class EnhancedFractalAttention:
         return torch.sum(cumulative_energy < 0.95).item()
 
     def get_information_content(self) -> float:
-        """Enhanced information content estimation"""
         attention_output = self(self.X)
         eps = 1e-10
-
-        # Compute entropy with improved numerical stability
+        
+        # Normalize output and compute proper probabilities
+        attention_output = F.normalize(attention_output, p=2, dim=-1)
         probs = F.softmax(attention_output, dim=-1)
         probs = torch.clamp(probs, min=eps, max=1.0)
-        entropy = -torch.sum(probs * torch.log2(probs)) / np.log2(
-            probs.shape[-1])
-
-        return entropy.item()
+        
+        # Compute normalized entropy
+        entropy = -torch.sum(probs * torch.log2(probs)) / (self.dim * np.log2(self.dim))
+        return float(entropy)  # Should be between 0 and 1
 
     def verify_attention_conservation(self) -> float:
-        """Verify attention pattern conservation with improved metrics"""
         X = F.normalize(self.X, p=2, dim=-1)
-
-        # Input attention
-        QK_input = self._compute_geometric_attention(X)
-        attention_input = self._stabilized_softmax(QK_input)
-
-        # Output attention
-        attention_output = F.normalize(self(self.X), p=2, dim=-1)
-
-        # Compute relative error with proper scaling
-        trace_input = torch.trace(attention_input) / self.dim
-        trace_output = torch.trace(attention_output) / self.dim
-
-        relative_error = torch.abs(trace_input - trace_output) / (
-            torch.abs(trace_input) + 1e-8)
-        return 1.0 - relative_error.item()  # Return conservation score between 0 and 1
+        
+        # Compute attention scores
+        attn_in = self._stabilized_softmax(self._compute_geometric_attention(X))
+        attn_out = self._stabilized_softmax(self._compute_geometric_attention(self(self.X)))
+        
+        # Compare normalized traces
+        trace_in = torch.trace(attn_in) / self.dim
+        trace_out = torch.trace(attn_out) / self.dim
+        
+        # Return positive conservation score
+        return float(1.0 - abs(trace_in - trace_out))

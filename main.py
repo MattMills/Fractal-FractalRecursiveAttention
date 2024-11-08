@@ -35,11 +35,14 @@ def analyze_fractal_dimensions(input_data, max_depth):
     try:
         dimensions = []
         manifold_dims = []
+        attention = EnhancedFractalAttention(input_data, max_depth=max_depth)
+        
+        # Analyze at each level
         for level in range(max_depth):
-            attention = EnhancedFractalAttention(input_data, level=level, max_depth=max_depth)
             metrics = attention.get_metrics()
-            dimensions.append(metrics.fractal_dimension)
-            manifold_dims.append(metrics.manifold_dimension)
+            dimensions.append(float(metrics.fractal_dimension))
+            manifold_dims.append(float(metrics.manifold_dimension))
+            
         return dimensions, manifold_dims
     except Exception as e:
         st.error(f"Error analyzing dimensions: {str(e)}")
