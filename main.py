@@ -13,7 +13,12 @@ from utils import generate_sample_data, render_latex_equations
 st.set_page_config(
     page_title="Fractal-Fractal Recompressive Attention Visualizer",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': None
+    }
 )
 
 st.title("Fractal-Fractal Recompressive Attention Visualizer")
@@ -21,6 +26,15 @@ st.title("Fractal-Fractal Recompressive Attention Visualizer")
 def handle_error(e):
     st.error(f"An error occurred: {str(e)}")
     return None
+
+def safe_visualization_wrapper(func):
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            st.error(f"Visualization error: {str(e)}")
+            return None
+    return wrapper
 
 @st.cache_data
 def compute_attention_patterns(input_data, max_depth):
@@ -50,21 +64,18 @@ def compute_attention_patterns(input_data, max_depth):
         return handle_error(e)
 
 @st.cache_data
+@safe_visualization_wrapper
 def analyze_fractal_dimensions(input_data, max_depth):
-    try:
-        dimensions = []
-        manifold_dims = []
-        attention = EnhancedFractalAttention(input_data, max_depth=max_depth)
+    dimensions = []
+    manifold_dims = []
+    attention = EnhancedFractalAttention(input_data, max_depth=max_depth)
+    
+    for level in range(max_depth):
+        metrics = attention.get_metrics()
+        dimensions.append(float(metrics.fractal_dimension))
+        manifold_dims.append(float(metrics.manifold_dimension))
         
-        for level in range(max_depth):
-            metrics = attention.get_metrics()
-            dimensions.append(float(metrics.fractal_dimension))
-            manifold_dims.append(float(metrics.manifold_dimension))
-            
-        return dimensions, manifold_dims
-    except Exception as e:
-        handle_error(e)
-        return None, None
+    return dimensions, manifold_dims
 
 # Sidebar controls
 st.sidebar.header("Parameters")
@@ -103,10 +114,11 @@ try:
                         else:  # Evolution
                             fig = plot_attention_evolution(result['evolution'])
                         
-                        st.plotly_chart(fig, use_container_width=True)
+                        if fig:
+                            st.plotly_chart(fig, use_container_width=True)
                         
-                        with st.expander("Attention Metrics"):
-                            st.json(result['metrics'])
+                            with st.expander("Attention Metrics"):
+                                st.json(result['metrics'])
                     except Exception as e:
                         handle_error(e)
 
@@ -118,10 +130,12 @@ try:
                     dimensions, manifold_dims = analyze_fractal_dimensions(input_data, max_depth)
                     if dimensions and manifold_dims:
                         fig_fractal = plot_fractal_dimension(dimensions)
-                        st.plotly_chart(fig_fractal, use_container_width=True)
+                        if fig_fractal:
+                            st.plotly_chart(fig_fractal, use_container_width=True)
                         
                         fig_manifold = plot_manifold_dimension(manifold_dims)
-                        st.plotly_chart(fig_manifold, use_container_width=True)
+                        if fig_manifold:
+                            st.plotly_chart(fig_manifold, use_container_width=True)
                 except Exception as e:
                     handle_error(e)
 
